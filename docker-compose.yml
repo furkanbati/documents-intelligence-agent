@@ -1,0 +1,115 @@
+# Belge otomasyonu: n8n akışları yönetir, iş mantığı mevcut servislerde kalır.
+#
+#   n8n        http://localhost:5678   akışlar, tetikleyiciler, onaylar
+#   postgres   n8n'in kendi verisi + "fatura" şemasındaki belge kayıtları
+#   extractor  ../scanned-doc-extractor (fiş/fatura alan çıkarımı)
+#   ollama     extractor'ın gizli (yerel) modu için model sunucusu
+#
+# Kurulum: README.md, "Kurulum".
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-otomasyon}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?.env içinde POSTGRES_PASSWORD gerekli}
+      POSTGRES_DB: ${POSTGRES_DB:-otomasyon}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      # Yalnızca veritabanı ilk oluşturulurken çalışır.
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n:${N8N_VERSION:-2.48.7}
+    ports:
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-otomasyon}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-otomasyon}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?.env içinde N8N_ENCRYPTION_KEY gerekli}
+      GENERIC_TIMEZONE: ${TIMEZONE:-Europe/Istanbul}
+      TZ: ${TIMEZONE:-Europe/Istanbul}
+      # Onay linkleri ve webhook adresleri bu adresle üretilir. Telegram'dan
+      # telefonla onay için burası dışarıdan erişilebilir olmalı (README).
+      WEBHOOK_URL: ${PUBLIC_URL:-http://localhost:5678}/
+      N8N_SECURE_COOKIE: ${N8N_SECURE_COOKIE:-false}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_RUNNERS_ENABLED: "true"
+      # Bekleyen onayları ve hataları görmek için yürütmeler saklanır.
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "720"
+    volumes:
+      - n8n:/home/node/.n8n
+      - ./workflows:/import/workflows:ro
+      - ./credentials:/import/credentials:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  extractor:
+    build: ../scanned-doc-extractor
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+      TEMPLATES_DIR: /data/templates
+    volumes:
+      - templates:/data/templates
+    # Yalnızca n8n erişir; denemek için: docker compose exec extractor ...
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  # ../enterprise-rag-assistant: sözleşme, politika gibi belgelerden kaynaklı
+  # cevap. Asistan workflow'u "dokuman_sor" aracıyla buraya sorar.
+  rag:
+    build: ../enterprise-rag-assistant
+    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      LLM_PROVIDER: ${RAG_LLM_PROVIDER:-ollama}
+      EMBED_PROVIDER: ${RAG_EMBED_PROVIDER:-ollama}
+      # Asistanla aynı model: CPU'da tek model bellekte kalır. Takma adı
+      # kurulum.ps1 oluşturur (qwen3.5:4b + makineye uygun thread sayısı).
+      CHAT_MODEL: ${ASISTAN_MODEL:-qwen3.5-asistan}
+      CHAT_MODEL_TR: ${ASISTAN_MODEL:-qwen3.5-asistan}
+      OLLAMA_THINK: "false"
+      # PDF tablolarını hücreleriyle okur (Docling TableFormer, ~360 MB, ilk
+      # kullanımda iner). Markdown, Word ve HTML tabloları her durumda okunur.
+      TABLE_STRUCTURE: ${RAG_TABLE_STRUCTURE:-false}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      HF_HOME: /root/.cache/huggingface
+    volumes:
+      - rag_chroma:/app/data/chroma
+      - huggingface:/root/.cache/huggingface
+    expose:
+      - "8000"
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama
+    # Thread sayısı modelde ayarlı (kurulum.ps1, qwen3.5-asistan); README "Hız".
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  postgres:
+  n8n:
+  templates:
+  ollama:
+  rag_chroma:
+  huggingface:

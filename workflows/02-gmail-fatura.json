@@ -1,0 +1,127 @@
+{
+  "id": "GmailFatura00002",
+  "name": "02 Gmail eki → fatura işleme",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "has:attachment -in:chats",
+          "readStatus": "unread"
+        },
+        "options": {
+          "downloadAttachments": true,
+          "dataPropertyAttachmentsPrefixName": "ek_"
+        }
+      },
+      "name": "Yeni e-posta",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "id": "yeni-e-posta",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "gmailHesap000001",
+          "name": "Gmail hesabı"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Her ek ayrı bir belge olur; yalnızca PDF, XML ve görseller.\nconst UZANTILAR = /\\.(pdf|xml|png|jpe?g|webp|tiff?)$/i;\nconst cikti = [];\nfor (const item of $input.all()) {\n  const gonderen = item.json.from?.text || item.json.from?.value?.[0]?.address || '';\n  for (const [anahtar, dosya] of Object.entries(item.binary || {})) {\n    if (!UZANTILAR.test(dosya.fileName || '')) continue;\n    cikti.push({ json: { kaynak: 'gmail', gonderen, konu: item.json.subject || '' },\n                 binary: { belge: dosya } });\n  }\n}\nreturn cikti;\n"
+      },
+      "name": "Ekleri ayır",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "id": "ekleri-ayır"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/fatura",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "belge"
+            },
+            {
+              "name": "kaynak",
+              "value": "gmail"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "name": "Fatura işlemeye gönder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "id": "fatura-işlemeye-gönder",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "faturaApiAnahtar",
+          "name": "Fatura API anahtarı"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Yeni e-posta": {
+      "main": [
+        [
+          {
+            "node": "Ekleri ayır",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ekleri ayır": {
+      "main": [
+        [
+          {
+            "node": "Fatura işlemeye gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Istanbul",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "errorWorkflow": "HataBildirim0099"
+  },
+  "pinData": {},
+  "tags": []
+}

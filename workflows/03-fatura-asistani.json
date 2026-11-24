@@ -1,0 +1,393 @@
+{
+  "id": "FaturaAsistani03",
+  "name": "03 Fatura asistanı",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "public": true,
+        "mode": "hostedChat",
+        "authentication": "basicAuth",
+        "options": {
+          "title": "Fatura Asistanı",
+          "subtitle": "Faturalar, sözleşmeler ve ödeme politikası",
+          "inputPlaceholder": "Sorunuzu yazın...",
+          "responseMode": "lastNode"
+        }
+      },
+      "name": "Sohbet",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.5,
+      "position": [
+        0,
+        200
+      ],
+      "id": "sohbet",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "asistanGirisi0001",
+          "name": "Asistan girişi"
+        }
+      },
+      "webhookId": "fatura-asistani",
+      "notes": "Tarayıcı kullanıcı adı ve şifre sorar (.env: ASISTAN_KULLANICI, ASISTAN_SIFRE)."
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "name": "Telegram mesajı",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        420
+      ],
+      "id": "telegram-mesajı",
+      "credentials": {
+        "telegramApi": {
+          "id": "telegramBot00001",
+          "name": "Telegram bot"
+        }
+      },
+      "disabled": true,
+      "webhookId": "fatura-asistani-telegram",
+      "notes": "Telegram kimlik bilgisini ekleyince açın; bota yazılan mesajlar asistana gelir."
+    },
+    {
+      "parameters": {
+        "jsCode": "const m = $json.message || {};\nreturn { json: { chatInput: m.text || '', sessionId: `telegram-${m.chat?.id}`, chat_id: m.chat?.id } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "Telegram girdisi",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        420
+      ],
+      "id": "telegram-girdisi"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.chatInput }}",
+        "options": {
+          "systemMessage": "=Sen XYZ Market muhasebe biriminin fatura asistanısın. Bugünün tarihi {{ $now.toFormat('yyyy-MM-dd') }}.\n\nAraçların:\n- fatura_toplami: tedarikçi ve duruma göre fatura adedi ve toplam tutar. \"Ne kadar\", \"toplam\", \"kaç fatura\" soruları için.\n- fatura_listesi: faturaları tek tek listeler (numara, tarih, tutar, durum). Belirli faturaları görmek için.\n- dokuman_sor: sözleşmeler ve şirket politikaları (vade, fiyatlar, onay yetkileri, ödeme günleri, iade). Bu konularda önce bu aracı kullan.\n\nKurallar:\n- Rakamları ve fatura bilgilerini yalnızca araç sonuçlarından ver; asla tahmin etme veya uydurma.\n- Sonuçlardaki durumlar: otomatik_onay (sistem onayladı) ve onaylandi (bir kişi onayladı) ikisi de onaylanmış faturadır; onay_bekliyor bekleyen, reddedildi reddedilmiş faturadır. Onaylanmış faturalar sorulunca durum filtresine \"onaylanan\" ver.\n- \"Geçen ay\", \"bu yıl\" gibi ifadeleri bugünün tarihine göre YYYY-AA-GG aralığına çevir.\n- Tutarlar TL'dir. Cevabı kısa ve Türkçe ver. Belgeden gelen bilgide belgenin adını söyle.\n- Araçlar bir şey bulamazsa bunu açıkça söyle.",
+          "maxIterations": 6,
+          "enableStreaming": false
+        }
+      },
+      "name": "Asistan",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        480,
+        300
+      ],
+      "id": "asistan"
+    },
+    {
+      "parameters": {
+        "model": "qwen3.5-asistan",
+        "options": {
+          "think": false,
+          "temperature": 0.1,
+          "numCtx": 8192,
+          "keepAlive": "30m"
+        }
+      },
+      "name": "Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        300,
+        560
+      ],
+      "id": "model",
+      "credentials": {
+        "ollamaApi": {
+          "id": "ollamaYerel00001",
+          "name": "Ollama (yerel)"
+        }
+      },
+      "notes": "Daha hızlı ve isabetli cevap için OpenAI Chat Model node'uyla değiştirilebilir (README)."
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.sessionId }}",
+        "tableName": "asistan_sohbetleri",
+        "contextWindowLength": 6
+      },
+      "name": "Sohbet hafızası",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.4,
+      "position": [
+        460,
+        560
+      ],
+      "id": "sohbet-hafızası",
+      "credentials": {
+        "postgres": {
+          "id": "pgBelgeler000001",
+          "name": "Postgres (belgeler)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Faturaların firma ve duruma göre adedini ve toplam tutarını (TL) verir. Filtreler isteğe bağlıdır.",
+        "operation": "executeQuery",
+        "query": "SELECT firma, durum, count(*)::int AS adet, sum(toplam) AS toplam_tl\n  FROM fatura.belgeler\nWHERE (NULLIF($1::text, '') IS NULL OR firma ILIKE '%' || $1::text || '%')\n  AND (NULLIF($2::text, '') IS NULL OR fatura_tarihi >= NULLIF($2::text, '')::date)\n  AND (NULLIF($3::text, '') IS NULL OR fatura_tarihi <= NULLIF($3::text, '')::date)\n  AND (NULLIF($4::text, '') IS NULL OR durum = $4::text\n       OR ($4::text = 'onaylanan' AND durum IN ('otomatik_onay', 'onaylandi')))\n GROUP BY firma, durum\n ORDER BY firma, durum;",
+        "options": {
+          "queryReplacement": "={{ [$fromAI('firma', 'Firma adı veya bir parçası; tüm firmalar için boş bırak', 'string', ''), $fromAI('baslangic', 'Fatura tarihi başlangıcı, YYYY-AA-GG; sınır yoksa boş', 'string', ''), $fromAI('bitis', 'Fatura tarihi bitişi, YYYY-AA-GG; sınır yoksa boş', 'string', ''), $fromAI('durum', 'Yalnızca bu durumdakiler: onaylanan (otomatik veya elle onaylanmış), onay_bekliyor, reddedildi; hepsi için boş', 'string', '')] }}"
+        }
+      },
+      "name": "fatura_toplami",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.5,
+      "position": [
+        620,
+        560
+      ],
+      "id": "fatura_toplami",
+      "credentials": {
+        "postgres": {
+          "id": "pgBelgeler000001",
+          "name": "Postgres (belgeler)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Faturaları tek tek listeler (en yeni 20). Filtreler isteğe bağlıdır.",
+        "operation": "executeQuery",
+        "query": "SELECT id, firma, fatura_no, fatura_tarihi, toplam AS toplam_tl, durum, nedenler\n  FROM fatura.belgeler\nWHERE (NULLIF($1::text, '') IS NULL OR firma ILIKE '%' || $1::text || '%')\n  AND (NULLIF($2::text, '') IS NULL OR fatura_tarihi >= NULLIF($2::text, '')::date)\n  AND (NULLIF($3::text, '') IS NULL OR fatura_tarihi <= NULLIF($3::text, '')::date)\n  AND (NULLIF($4::text, '') IS NULL OR durum = $4::text\n       OR ($4::text = 'onaylanan' AND durum IN ('otomatik_onay', 'onaylandi')))\n ORDER BY fatura_tarihi DESC NULLS LAST, id DESC\n LIMIT 20;",
+        "options": {
+          "queryReplacement": "={{ [$fromAI('firma', 'Firma adı veya bir parçası; tüm firmalar için boş bırak', 'string', ''), $fromAI('baslangic', 'Fatura tarihi başlangıcı, YYYY-AA-GG; sınır yoksa boş', 'string', ''), $fromAI('bitis', 'Fatura tarihi bitişi, YYYY-AA-GG; sınır yoksa boş', 'string', ''), $fromAI('durum', 'Yalnızca bu durumdakiler: onaylanan (otomatik veya elle onaylanmış), onay_bekliyor, reddedildi; hepsi için boş', 'string', '')] }}"
+        }
+      },
+      "name": "fatura_listesi",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        560
+      ],
+      "id": "fatura_listesi",
+      "credentials": {
+        "postgres": {
+          "id": "pgBelgeler000001",
+          "name": "Postgres (belgeler)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Şirket belgelerine (tedarikçi sözleşmeleri, ödeme ve onay politikası) soru sorar; kaynaklı bir cevap döner.",
+        "method": "POST",
+        "url": "http://rag:8000/chat",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ question: $fromAI('soru', 'Belgelere sorulacak soru, Türkçe ve tam cümle', 'string') }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "name": "dokuman_sor",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        940,
+        560
+      ],
+      "id": "dokuman_sor"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Telegram'dan mı?",
+              "leftValue": "={{ $('Telegram girdisi').isExecuted }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Telegram'dan mı?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        840,
+        300
+      ],
+      "id": "telegram'dan-mı?"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram girdisi').item.json.chat_id }}",
+        "text": "={{ $json.output }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Telegram'a yanıt",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1060,
+        220
+      ],
+      "id": "telegram'a-yanıt",
+      "credentials": {
+        "telegramApi": {
+          "id": "telegramBot00001",
+          "name": "Telegram bot"
+        }
+      },
+      "disabled": true,
+      "notes": "Telegram mesajı node'uyla birlikte açın."
+    }
+  ],
+  "connections": {
+    "Sohbet": {
+      "main": [
+        [
+          {
+            "node": "Asistan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram mesajı": {
+      "main": [
+        [
+          {
+            "node": "Telegram girdisi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram girdisi": {
+      "main": [
+        [
+          {
+            "node": "Asistan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Asistan": {
+      "main": [
+        [
+          {
+            "node": "Telegram'dan mı?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram'dan mı?": {
+      "main": [
+        [
+          {
+            "node": "Telegram'a yanıt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Asistan",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sohbet hafızası": {
+      "ai_memory": [
+        [
+          {
+            "node": "Asistan",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fatura_toplami": {
+      "ai_tool": [
+        [
+          {
+            "node": "Asistan",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fatura_listesi": {
+      "ai_tool": [
+        [
+          {
+            "node": "Asistan",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "dokuman_sor": {
+      "ai_tool": [
+        [
+          {
+            "node": "Asistan",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Istanbul",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "errorWorkflow": "HataBildirim0099"
+  },
+  "pinData": {},
+  "tags": []
+}

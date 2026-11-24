@@ -1,0 +1,123 @@
+{
+  "id": "HataBildirim0099",
+  "name": "99 Hata bildirimi",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Hata oldu",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ],
+      "id": "hata-oldu"
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $json.execution || {};\nconst mesaj = e.error?.message || 'Bilinmeyen hata';\nconst node = e.lastNodeExecuted || e.error?.node?.name || '';\nconst workflow = $json.workflow?.name || '';\nreturn {\n  json: {\n    workflow, node, mesaj, url: e.url || null,\n    metin: `⚠️ ${workflow} hata verdi\\nNode: ${node}\\n${mesaj}${e.url ? `\\n${e.url}` : ''}`,\n    chat_id: '',  // Hata mesajlarının gideceği Telegram sohbeti\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "Hata özeti",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "id": "hata-özeti"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO fatura.hatalar (workflow, node, mesaj, yurutme_url)\nVALUES ($1, $2, $3, $4) RETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [$json.workflow, $json.node, $json.mesaj, $json.url] }}"
+        }
+      },
+      "name": "Hatayı kaydet",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        440,
+        300
+      ],
+      "id": "hatayı-kaydet",
+      "credentials": {
+        "postgres": {
+          "id": "pgBelgeler000001",
+          "name": "Postgres (belgeler)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Hata özeti').item.json.chat_id }}",
+        "text": "={{ $('Hata özeti').item.json.metin }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Telegram'a bildir",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        660,
+        300
+      ],
+      "id": "telegram'a-bildir",
+      "credentials": {
+        "telegramApi": {
+          "id": "telegramBot00001",
+          "name": "Telegram bot"
+        }
+      },
+      "disabled": true,
+      "notes": "Telegram kimlik bilgisini ekleyip Hata özeti'nde chat_id'yi doldurunca açın."
+    }
+  ],
+  "connections": {
+    "Hata oldu": {
+      "main": [
+        [
+          {
+            "node": "Hata özeti",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hata özeti": {
+      "main": [
+        [
+          {
+            "node": "Hatayı kaydet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hatayı kaydet": {
+      "main": [
+        [
+          {
+            "node": "Telegram'a bildir",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Istanbul",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "tags": []
+}

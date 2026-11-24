@@ -1,0 +1,657 @@
+{
+  "id": "FaturaIsleme0001",
+  "name": "01 Fatura işleme",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fatura",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Fatura geldi",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "id": "fatura-geldi",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "faturaApiAnahtar",
+          "name": "Fatura API anahtarı"
+        }
+      },
+      "webhookId": "fatura-isleme-webhook",
+      "notes": "X-API-Key başlığı olmayan istekler reddedilir (.env: FATURA_API_KEY)."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Ayarlar: müşteriye göre burayı değiştirin ----\nconst AYARLAR = {\n  // '' = extractor'ın varsayılanı; 'accurate' (OpenAI) veya 'private' (yerel)\n  profil: '',\n  belge_turu: 'invoice',\n  // Bu tutarın üstündeki faturalar her zaman onaya düşer.\n  oto_onay_limiti: 10000,\n  // Onay mesajlarının gideceği Telegram sohbeti (README, \"Telegram\").\n  telegram_chat_id: '',\n};\n\nconst binary = $input.item.binary || {};\nconst anahtarlar = Object.keys(binary);\nif (!anahtarlar.length) {\n  throw new Error(\"İstekte dosya yok: multipart/form-data ile 'file' alanında gönderin.\");\n}\nconst dosya = binary[anahtarlar[0]];\nconst body = $json.body || {};\n\nreturn {\n  json: {\n    kaynak: body.kaynak || 'webhook',\n    dosya_adi: dosya.fileName || anahtarlar[0],\n    ayarlar: AYARLAR,\n  },\n  binary: { belge: dosya },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "Hazırla",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "id": "hazırla"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://extractor:8000/extract",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "belge"
+            },
+            {
+              "name": "doctype",
+              "value": "={{ $json.ayarlar.belge_turu }}"
+            },
+            {
+              "name": "profile",
+              "value": "={{ $json.ayarlar.profil }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "name": "Alanları çıkar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "id": "alanları-çıkar",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extractor'ın sonucunu bir kayda çevirir ve kendi kontrollerini ekler.\nconst hazirla = $('Hazırla').item.json;\nconst r = $json;\nconst n = r.normalized || {};\nconst f = r.fields || {};\nconst ETIKET = { company: 'Firma', tax_id: 'Vergi no', invoice_number: 'Fatura no',\n                 date: 'Tarih', subtotal: 'Ara toplam', tax: 'KDV', total: 'Toplam' };\nconst NOT = { 'not found': 'okunamadı', 'not a recognisable date': 'tarih olarak okunamadı',\n              'not an amount': 'tutar olarak okunamadı' };\n\nconst nedenler = new Set();\nfor (const [alan, not] of Object.entries(r.review || {})) {\n  nedenler.add(`${ETIKET[alan] || alan}: ${NOT[not] || not}`);\n}\n// Extractor'ın kendi kapısı (kalem toplamları vb.). Alan notları yukarıda.\nif (r.gate && !r.gate.accepted) {\n  for (const neden of r.gate.reasons || []) {\n    if (!Object.keys(ETIKET).some(alan => neden.startsWith(alan + ' '))) {\n      nedenler.add(`Extractor kontrolü: ${neden}`);\n    }\n  }\n}\n\nconst sayi = v => (v === null || v === undefined || v === '' || isNaN(Number(v))) ? null : Number(v);\nconst ara = sayi(n.subtotal), kdv = sayi(n.tax), toplam = sayi(n.total);\nif (ara !== null && kdv !== null && toplam !== null && Math.abs(ara + kdv - toplam) > 0.05) {\n  nedenler.add(`Tutarlar tutmuyor: ${ara} + ${kdv} ≠ ${toplam}`);\n}\nconst limit = hazirla.ayarlar.oto_onay_limiti;\nif (toplam !== null && toplam > limit) {\n  nedenler.add(`Toplam ${toplam}, otomatik onay limitini (${limit}) aşıyor`);\n}\n\nconst temiz = v => (v || '').toString().trim() || null;\nconst vergi_no = (f.tax_id || '').replace(/[^0-9A-Za-z]/g, '') || null;\nconst tarih = /^\\d{4}-\\d{2}-\\d{2}$/.test(n.date || '') ? n.date : null;\n\n// Satır kutuları büyük ve kayıtta işe yaramaz.\nconst { lines, field_lines, ...ham } = r;\n\nreturn {\n  json: {\n    kayit: {\n      kaynak: hazirla.kaynak,\n      dosya_adi: hazirla.dosya_adi,\n      firma: temiz(f.company),\n      vergi_no,\n      fatura_no: temiz(f.invoice_number),\n      fatura_tarihi: tarih,\n      ara_toplam: ara,\n      kdv,\n      toplam,\n      yontem: r.method || null,\n    },\n    nedenler: [...nedenler],\n    ham,\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "Kontrol et",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "id": "kontrol-et"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    (SELECT unvan FROM fatura.tedarikciler WHERE vergi_no = $1::text) AS tedarikci,\n    (SELECT count(*) FROM fatura.belgeler\n      WHERE vergi_no = $1::text AND fatura_no = $2::text AND durum <> 'reddedildi')::int AS mukerrer;",
+        "options": {
+          "queryReplacement": "={{ [$json.kayit.vergi_no, $json.kayit.fatura_no] }}"
+        }
+      },
+      "name": "Tedarikçi ve mükerrer",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        880,
+        300
+      ],
+      "id": "tedarikçi-ve-mükerrer",
+      "credentials": {
+        "postgres": {
+          "id": "pgBelgeler000001",
+          "name": "Postgres (belgeler)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Tedarikçi ve mükerrer kontrolünün sonucunu ekler, durumu belirler.\nconst k = $('Kontrol et').item.json;\nconst nedenler = [...k.nedenler];\n\nif (!$json.tedarikci) {\n  nedenler.push(k.kayit.vergi_no\n    ? `Tedarikçi kayıtlı değil (vergi no ${k.kayit.vergi_no})`\n    : 'Vergi numarası okunamadı, tedarikçi doğrulanamadı');\n}\nif (Number($json.mukerrer) > 0) {\n  nedenler.push(`Mükerrer olabilir: aynı vergi no ve fatura no ile ${$json.mukerrer} kayıt var`);\n}\n\nconst durum = nedenler.length ? 'onay_bekliyor' : 'otomatik_onay';\n// Bu yürütme, Wait node'unda bu adres çağrılana kadar bekler.\nconst base = $execution.resumeUrl;\nconst ek = base.includes('?') ? '&' : '?';\n\nreturn {\n  json: {\n    ...k.kayit,\n    durum,\n    nedenler,\n    onay_linki: durum === 'onay_bekliyor' ? base : null,\n    linkler: durum === 'onay_bekliyor'\n      ? { onayla: `${base}${ek}karar=onay`, reddet: `${base}${ek}karar=red` }\n      : null,\n    ham: k.ham,\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "Karar ver",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ],
+      "id": "karar-ver"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO fatura.belgeler\n    (kaynak, dosya_adi, firma, vergi_no, fatura_no, fatura_tarihi,\n     ara_toplam, kdv, toplam, yontem, durum, nedenler, onay_linki, ham_sonuc)\nVALUES ($1, $2, $3, $4, $5, $6::date, $7::numeric, $8::numeric, $9::numeric,\n        $10, $11, $12::jsonb, $13, $14::jsonb)\nRETURNING *;",
+        "options": {
+          "queryReplacement": "={{ [$json.kaynak, $json.dosya_adi, $json.firma, $json.vergi_no, $json.fatura_no, $json.fatura_tarihi, $json.ara_toplam, $json.kdv, $json.toplam, $json.yontem, $json.durum, JSON.stringify($json.nedenler), $json.onay_linki, JSON.stringify($json.ham)] }}"
+        }
+      },
+      "name": "Kayıt ekle",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1320,
+        300
+      ],
+      "id": "kayıt-ekle",
+      "credentials": {
+        "postgres": {
+          "id": "pgBelgeler000001",
+          "name": "Postgres (belgeler)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { id: $json.id, durum: $json.durum, nedenler: $json.nedenler, firma: $json.firma, fatura_no: $json.fatura_no, toplam: $json.toplam, linkler: $('Karar ver').item.json.linkler } }}",
+        "options": {}
+      },
+      "name": "Yanıtla",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        300
+      ],
+      "id": "yanıtla"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Onay gerekli mi?",
+              "leftValue": "={{ $json.durum }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "rightValue": "onay_bekliyor"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Onay gerekli mi?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        300
+      ],
+      "id": "onay-gerekli-mi?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $json;\nconst linkler = $('Karar ver').item.json.linkler;\nconst metin = [\n  `🧾 Onay bekleyen fatura #${b.id}`,\n  `Firma: ${b.firma ?? '-'}`,\n  `Fatura no: ${b.fatura_no ?? '-'}`,\n  `Tarih: ${b.fatura_tarihi ? String(b.fatura_tarihi).slice(0, 10) : '-'}`,\n  `Toplam: ${b.toplam ?? '-'}`,\n  '',\n  'Neden onaya düştü:',\n  ...b.nedenler.map(n => `• ${n}`),\n  '',\n  `✅ Onayla: ${linkler.onayla}`,\n  `❌ Reddet: ${linkler.reddet}`,\n].join('\\n');\n\nreturn { json: { ...b, chat_id: $('Hazırla').item.json.ayarlar.telegram_chat_id, metin } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "Onay mesajı",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        180
+      ],
+      "id": "onay-mesajı"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.metin }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true
+        }
+      },
+      "name": "Telegram'a gönder",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2200,
+        180
+      ],
+      "id": "telegram'a-gönder",
+      "credentials": {
+        "telegramApi": {
+          "id": "telegramBot00001",
+          "name": "Telegram bot"
+        }
+      },
+      "disabled": true,
+      "notes": "Telegram kimlik bilgisini ekleyip Hazırla'da telegram_chat_id'yi doldurunca açın."
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "httpMethod": "GET",
+        "responseMode": "responseNode",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 7,
+        "resumeUnit": "days",
+        "options": {}
+      },
+      "name": "Karar bekle",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2420,
+        180
+      ],
+      "id": "karar-bekle",
+      "webhookId": "fatura-karar-bekle"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Onay linkinden gelen karar. Süre dolduysa sorgu yoktur, kayıt bekler.\nconst karar = ($json.query || {}).karar;\nconst durum = karar === 'onay' ? 'onaylandi' : karar === 'red' ? 'reddedildi' : '';\nreturn { json: { id: $('Kayıt ekle').item.json.id, durum, karar_veren: durum ? 'onay linki' : null } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "Kararı oku",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        180
+      ],
+      "id": "kararı-oku"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Karar verildi mi?",
+              "leftValue": "={{ $json.durum }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Karar verildi mi?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2860,
+        180
+      ],
+      "id": "karar-verildi-mi?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE fatura.belgeler\n   SET durum = $2::text, karar_veren = $3::text, karar_zamani = now()\n WHERE id = $1::bigint AND durum = 'onay_bekliyor'\nRETURNING *;",
+        "options": {
+          "queryReplacement": "={{ [$json.id, $json.durum, $json.karar_veren] }}"
+        }
+      },
+      "name": "Kararı kaydet",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3080,
+        100
+      ],
+      "id": "kararı-kaydet",
+      "credentials": {
+        "postgres": {
+          "id": "pgBelgeler000001",
+          "name": "Postgres (belgeler)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "=<!doctype html><html lang=\"tr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Fatura kararı</title></head><body style=\"font-family:system-ui,sans-serif;padding:2rem;max-width:32rem;margin:auto\"><h2>Fatura #{{ $json.id }} {{ $json.durum === 'onaylandi' ? 'onaylandı ✅' : 'reddedildi ❌' }}</h2><p>Karar kaydedildi. Bu sayfayı kapatabilirsiniz.</p></body></html>",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "name": "Karar sayfası",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3300,
+        100
+      ],
+      "id": "karar-sayfası"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Onaylandı mı?",
+              "leftValue": "={{ $json.durum }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "rightValue": "onaylandi"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Onaylandı mı?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3520,
+        100
+      ],
+      "id": "onaylandı-mı?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $json;\nreturn {\n  json: {\n    'Kayıt': b.id,\n    'Fatura Tarihi': b.fatura_tarihi ? String(b.fatura_tarihi).slice(0, 10) : '',\n    'Firma': b.firma ?? '',\n    'Vergi No': b.vergi_no ?? '',\n    'Fatura No': b.fatura_no ?? '',\n    'Ara Toplam': b.ara_toplam ?? '',\n    'KDV': b.kdv ?? '',\n    'Toplam': b.toplam ?? '',\n    'Durum': b.durum,\n    'Kaynak': b.kaynak ?? '',\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "Sheets satırı",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3740,
+        400
+      ],
+      "id": "sheets-satırı"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Faturalar"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "name": "Google Sheets'e yaz",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3960,
+        400
+      ],
+      "id": "google-sheets'e-yaz",
+      "disabled": true,
+      "notes": "Google kimlik bilgisini ve tablo adresini girip açın. Tabloda 'Faturalar' sayfası ve Sheets satırı node'undaki başlıklar olmalı."
+    }
+  ],
+  "connections": {
+    "Fatura geldi": {
+      "main": [
+        [
+          {
+            "node": "Hazırla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hazırla": {
+      "main": [
+        [
+          {
+            "node": "Alanları çıkar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alanları çıkar": {
+      "main": [
+        [
+          {
+            "node": "Kontrol et",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kontrol et": {
+      "main": [
+        [
+          {
+            "node": "Tedarikçi ve mükerrer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tedarikçi ve mükerrer": {
+      "main": [
+        [
+          {
+            "node": "Karar ver",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Karar ver": {
+      "main": [
+        [
+          {
+            "node": "Kayıt ekle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kayıt ekle": {
+      "main": [
+        [
+          {
+            "node": "Yanıtla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Yanıtla": {
+      "main": [
+        [
+          {
+            "node": "Onay gerekli mi?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Onay gerekli mi?": {
+      "main": [
+        [
+          {
+            "node": "Onay mesajı",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sheets satırı",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Onay mesajı": {
+      "main": [
+        [
+          {
+            "node": "Telegram'a gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram'a gönder": {
+      "main": [
+        [
+          {
+            "node": "Karar bekle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Karar bekle": {
+      "main": [
+        [
+          {
+            "node": "Kararı oku",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kararı oku": {
+      "main": [
+        [
+          {
+            "node": "Karar verildi mi?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Karar verildi mi?": {
+      "main": [
+        [
+          {
+            "node": "Kararı kaydet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kararı kaydet": {
+      "main": [
+        [
+          {
+            "node": "Karar sayfası",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Karar sayfası": {
+      "main": [
+        [
+          {
+            "node": "Onaylandı mı?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Onaylandı mı?": {
+      "main": [
+        [
+          {
+            "node": "Sheets satırı",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheets satırı": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets'e yaz",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Istanbul",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "errorWorkflow": "HataBildirim0099"
+  },
+  "pinData": {},
+  "tags": []
+}

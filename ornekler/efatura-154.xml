@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Uydurma bir e-Fatura (UBL-TR); scanned-doc-extractor testlerinden. -->
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2" xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2" xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <cbc:UBLVersionID>2.1</cbc:UBLVersionID>
+  <cbc:ProfileID>TICARIFATURA</cbc:ProfileID>
+  <cbc:ID>ABC2024000000154</cbc:ID>
+  <cbc:UUID>a47ac10b-58cc-4372-a567-0e02b2c3d479</cbc:UUID>
+  <cbc:IssueDate>2024-03-12</cbc:IssueDate>
+  <cbc:IssueTime>14:05:00</cbc:IssueTime>
+  <cbc:InvoiceTypeCode>SATIS</cbc:InvoiceTypeCode>
+  <cbc:DocumentCurrencyCode>TRY</cbc:DocumentCurrencyCode>
+  <cac:AccountingSupplierParty><cac:Party>
+      <cac:PartyIdentification><cbc:ID schemeID="VKN">1234567890</cbc:ID></cac:PartyIdentification>
+      <cac:PartyIdentification><cbc:ID schemeID="MERSISNO">0123456789000015</cbc:ID></cac:PartyIdentification>
+      <cac:PartyName><cbc:Name>ABC Gıda Sanayi ve Ticaret A.Ş.</cbc:Name></cac:PartyName>
+  </cac:Party></cac:AccountingSupplierParty>
+  <cac:AccountingCustomerParty><cac:Party>
+      <cac:PartyIdentification><cbc:ID schemeID="VKN">9876543210</cbc:ID></cac:PartyIdentification>
+      <cac:PartyName><cbc:Name>XYZ Market Ltd. Şti.</cbc:Name></cac:PartyName>
+  </cac:Party></cac:AccountingCustomerParty>
+  <cac:TaxTotal>
+    <cbc:TaxAmount currencyID="TRY">446.10</cbc:TaxAmount>
+  </cac:TaxTotal>
+  <cac:LegalMonetaryTotal>
+    <cbc:LineExtensionAmount currencyID="TRY">2230.50</cbc:LineExtensionAmount>
+    <cbc:TaxExclusiveAmount currencyID="TRY">2230.50</cbc:TaxExclusiveAmount>
+    <cbc:TaxInclusiveAmount currencyID="TRY">2676.60</cbc:TaxInclusiveAmount>
+    <cbc:PayableAmount currencyID="TRY">2676.60</cbc:PayableAmount>
+  </cac:LegalMonetaryTotal>
+  <cac:InvoiceLine>
+    <cbc:ID>1</cbc:ID>
+    <cbc:InvoicedQuantity unitCode="KGM">1</cbc:InvoicedQuantity>
+    <cbc:LineExtensionAmount currencyID="TRY">1250.00</cbc:LineExtensionAmount>
+    <cac:TaxTotal><cbc:TaxAmount currencyID="TRY">0</cbc:TaxAmount></cac:TaxTotal>
+    <cac:Item><cbc:Name>Un 50 kg</cbc:Name></cac:Item>
+    <cac:Price><cbc:PriceAmount currencyID="TRY">1250.00</cbc:PriceAmount></cac:Price>
+  </cac:InvoiceLine>
+  <cac:InvoiceLine>
+    <cbc:ID>2</cbc:ID>
+    <cbc:InvoicedQuantity unitCode="KGM">1</cbc:InvoicedQuantity>
+    <cbc:LineExtensionAmount currencyID="TRY">980.50</cbc:LineExtensionAmount>
+    <cac:AllowanceCharge><cbc:ChargeIndicator>false</cbc:ChargeIndicator><cbc:Amount currencyID="TRY">19.50</cbc:Amount></cac:AllowanceCharge>
+    <cac:TaxTotal><cbc:TaxAmount currencyID="TRY">0</cbc:TaxAmount></cac:TaxTotal>
+    <cac:Item><cbc:Name>Şeker 25 kg</cbc:Name></cac:Item>
+    <cac:Price><cbc:PriceAmount currencyID="TRY">1000.00</cbc:PriceAmount></cac:Price>
+  </cac:InvoiceLine>
+</Invoice>
