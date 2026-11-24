@@ -1,5 +1,51 @@
 # Documents Intelligence Agent
 
+## In English
+
+An **n8n** automation for accounts payable. Invoices are read, checked, and
+either approved automatically or sent to a person for approval. A Turkish
+AI assistant answers questions about the invoices and the company's documents.
+Everything runs in Docker and can run fully on-premises with local models.
+
+**How an invoice flows**
+
+1. An invoice arrives as an email attachment (Gmail) or is posted to a webhook
+   protected by an API key. It can be a PDF, a photo or a Turkish e-Fatura XML.
+2. [scanned-doc-extractor](https://github.com/furkanbati/scanned-doc-extractor)
+   reads the supplier, tax number, invoice number, date, subtotal, VAT and total.
+3. The workflow checks them: missing fields, subtotal + VAT = total, an amount
+   limit, a known supplier, and duplicates of an earlier invoice.
+4. If every check passes, the invoice is approved automatically and recorded
+   (Postgres, Google Sheets). Otherwise the approver gets a Telegram message
+   with the reasons and signed approve/reject links. The workflow waits up to
+   7 days for the decision and records who decided and when.
+5. Errors in any workflow are logged and reported, so no invoice is lost silently.
+
+**The assistant** is an n8n AI Agent with three tools: two fixed, parameterised
+SQL queries over the invoices (the model fills in filters and cannot write SQL
+or change data), and a document tool backed by
+[enterprise-rag-assistant](https://github.com/furkanbati/enterprise-rag-assistant)
+for contracts and policies, tables included. It remembers the conversation
+in Postgres. Example: *"How much did we approve for ABC Gıda?"* → 5,353.20 TL,
+with the breakdown; *"What is the payment term in our contract?"* → 30 days,
+quoting the contract.
+
+**Measured on a laptop CPU** (Intel Core Ultra 5 225H, no GPU, `qwen3.5:4b`):
+an invoice is processed in about 3 seconds; the assistant answers in 11–70
+seconds. Ollama's default of one thread per core dropped generation on this
+hybrid-core CPU to 0.35 tokens/s (7 minutes per answer); setup now creates a
+thread-tuned model alias, which runs at 16 tokens/s. Switching the assistant
+to OpenAI makes answers faster when the documents may leave the server.
+
+**Run it** (Windows, Docker Desktop): clone this repository next to the two
+service repositories and run `kurulum.ps1`. It generates the secrets, starts
+the services, imports the credentials and workflows, and loads the sample
+documents. Details are in the Turkish sections below:
+[Kurulum](#kurulum) (setup), [Erişim ve güvenlik](#erişim-ve-güvenlik) (access),
+[Fatura asistanı](#fatura-asistanı-03) (assistant), [Hız](#hız) (speed).
+
+---
+
 E-posta, webhook veya Telegram'dan gelen faturaları okuyan, kontrol eden,
 şüpheli olanları onaya gönderen ve sonucu kaydeden bir **n8n** otomasyonu.
 
