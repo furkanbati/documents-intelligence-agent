@@ -30,7 +30,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// ---- Ayarlar: müşteriye göre burayı değiştirin ----\nconst AYARLAR = {\n  // '' = extractor'ın varsayılanı; 'accurate' (OpenAI) veya 'private' (yerel)\n  profil: '',\n  belge_turu: 'invoice',\n  // Bu tutarın üstündeki faturalar her zaman onaya düşer.\n  oto_onay_limiti: 10000,\n  // Onay mesajlarının gideceği Telegram sohbeti (README, \"Telegram\").\n  telegram_chat_id: '',\n};\n\nconst binary = $input.item.binary || {};\nconst anahtarlar = Object.keys(binary);\nif (!anahtarlar.length) {\n  throw new Error(\"İstekte dosya yok: multipart/form-data ile 'file' alanında gönderin.\");\n}\nconst dosya = binary[anahtarlar[0]];\nconst body = $json.body || {};\n\nreturn {\n  json: {\n    kaynak: body.kaynak || 'webhook',\n    dosya_adi: dosya.fileName || anahtarlar[0],\n    ayarlar: AYARLAR,\n  },\n  binary: { belge: dosya },\n};\n",
+        "jsCode": "// ---- Ayarlar: müşteriye göre burayı değiştirin ----\nconst AYARLAR = {\n  // '' = extractor'ın varsayılanı; 'accurate' (OpenAI) veya 'private' (yerel)\n  profil: '',\n  belge_turu: 'invoice',\n  // Bu tutarın üstündeki faturalar her zaman onaya düşer.\n  oto_onay_limiti: 10000,\n  // Onay mesajlarının gideceği Telegram sohbeti. kurulum.ps1, .env'deki\n  // TELEGRAM_CHAT_ID ile doldurur (scripts/render-workflows.js).\n  telegram_chat_id: '__TELEGRAM_CHAT_ID__',\n};\n\nconst binary = $input.item.binary || {};\nconst anahtarlar = Object.keys(binary);\nif (!anahtarlar.length) {\n  throw new Error(\"İstekte dosya yok: multipart/form-data ile 'file' alanında gönderin.\");\n}\nconst dosya = binary[anahtarlar[0]];\nconst body = $json.body || {};\n\nreturn {\n  json: {\n    kaynak: body.kaynak || 'webhook',\n    dosya_adi: dosya.fileName || anahtarlar[0],\n    ayarlar: AYARLAR,\n  },\n  binary: { belge: dosya },\n};\n",
         "mode": "runOnceForEachItem"
       },
       "name": "Hazırla",
@@ -83,7 +83,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Extractor'ın sonucunu bir kayda çevirir ve kendi kontrollerini ekler.\nconst hazirla = $('Hazırla').item.json;\nconst r = $json;\nconst n = r.normalized || {};\nconst f = r.fields || {};\nconst ETIKET = { company: 'Firma', tax_id: 'Vergi no', invoice_number: 'Fatura no',\n                 date: 'Tarih', subtotal: 'Ara toplam', tax: 'KDV', total: 'Toplam' };\nconst NOT = { 'not found': 'okunamadı', 'not a recognisable date': 'tarih olarak okunamadı',\n              'not an amount': 'tutar olarak okunamadı' };\n\nconst nedenler = new Set();\nfor (const [alan, not] of Object.entries(r.review || {})) {\n  nedenler.add(`${ETIKET[alan] || alan}: ${NOT[not] || not}`);\n}\n// Extractor'ın kendi kapısı (kalem toplamları vb.). Alan notları yukarıda.\nif (r.gate && !r.gate.accepted) {\n  for (const neden of r.gate.reasons || []) {\n    if (!Object.keys(ETIKET).some(alan => neden.startsWith(alan + ' '))) {\n      nedenler.add(`Extractor kontrolü: ${neden}`);\n    }\n  }\n}\n\nconst sayi = v => (v === null || v === undefined || v === '' || isNaN(Number(v))) ? null : Number(v);\nconst ara = sayi(n.subtotal), kdv = sayi(n.tax), toplam = sayi(n.total);\nif (ara !== null && kdv !== null && toplam !== null && Math.abs(ara + kdv - toplam) > 0.05) {\n  nedenler.add(`Tutarlar tutmuyor: ${ara} + ${kdv} ≠ ${toplam}`);\n}\nconst limit = hazirla.ayarlar.oto_onay_limiti;\nif (toplam !== null && toplam > limit) {\n  nedenler.add(`Toplam ${toplam}, otomatik onay limitini (${limit}) aşıyor`);\n}\n\nconst temiz = v => (v || '').toString().trim() || null;\nconst vergi_no = (f.tax_id || '').replace(/[^0-9A-Za-z]/g, '') || null;\nconst tarih = /^\\d{4}-\\d{2}-\\d{2}$/.test(n.date || '') ? n.date : null;\n\n// Satır kutuları büyük ve kayıtta işe yaramaz.\nconst { lines, field_lines, ...ham } = r;\n\nreturn {\n  json: {\n    kayit: {\n      kaynak: hazirla.kaynak,\n      dosya_adi: hazirla.dosya_adi,\n      firma: temiz(f.company),\n      vergi_no,\n      fatura_no: temiz(f.invoice_number),\n      fatura_tarihi: tarih,\n      ara_toplam: ara,\n      kdv,\n      toplam,\n      yontem: r.method || null,\n    },\n    nedenler: [...nedenler],\n    ham,\n  },\n};\n",
+        "jsCode": "// Extractor'ın sonucunu bir kayda çevirir ve kendi kontrollerini ekler.\nconst hazirla = $('Hazırla').item.json;\nconst r = $json;\nconst n = r.normalized || {};\nconst f = r.fields || {};\nconst ETIKET = { company: 'Firma', tax_id: 'Vergi no', invoice_number: 'Fatura no',\n                 date: 'Tarih', subtotal: 'Ara toplam', tax: 'KDV', total: 'Toplam' };\nconst NOT = { 'not found': 'okunamadı', 'not a recognisable date': 'tarih olarak okunamadı',\n              'not an amount': 'tutar olarak okunamadı' };\n\nconst nedenler = new Set();\nfor (const [alan, not] of Object.entries(r.review || {})) {\n  nedenler.add(`${ETIKET[alan] || alan}: ${NOT[not] || not}`);\n}\n// Extractor'ın kendi kapısı (kalem toplamları vb.). Alan notları yukarıda.\nif (r.gate && !r.gate.accepted) {\n  for (const neden of r.gate.reasons || []) {\n    if (!Object.keys(ETIKET).some(alan => neden.startsWith(alan + ' '))) {\n      nedenler.add(`Extractor kontrolü: ${neden}`);\n    }\n  }\n}\n\nconst sayi = v => (v === null || v === undefined || v === '' || isNaN(Number(v))) ? null : Number(v);\nconst tl = v => `${Number(v).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} TL`;\nconst ara = sayi(n.subtotal), kdv = sayi(n.tax), toplam = sayi(n.total);\nif (ara !== null && kdv !== null && toplam !== null && Math.abs(ara + kdv - toplam) > 0.05) {\n  nedenler.add(`Tutarlar tutmuyor: ${tl(ara)} + ${tl(kdv)} ≠ ${tl(toplam)}`);\n}\nconst limit = hazirla.ayarlar.oto_onay_limiti;\nif (toplam !== null && toplam > limit) {\n  nedenler.add(`Toplam ${tl(toplam)}, otomatik onay limitini (${tl(limit)}) aşıyor`);\n}\n\nconst temiz = v => (v || '').toString().trim() || null;\nconst vergi_no = (f.tax_id || '').replace(/[^0-9A-Za-z]/g, '') || null;\nconst tarih = /^\\d{4}-\\d{2}-\\d{2}$/.test(n.date || '') ? n.date : null;\n\n// Satır kutuları büyük ve kayıtta işe yaramaz.\nconst { lines, field_lines, ...ham } = r;\n\nreturn {\n  json: {\n    kayit: {\n      kaynak: hazirla.kaynak,\n      dosya_adi: hazirla.dosya_adi,\n      firma: temiz(f.company),\n      vergi_no,\n      fatura_no: temiz(f.invoice_number),\n      fatura_tarihi: tarih,\n      ara_toplam: ara,\n      kdv,\n      toplam,\n      yontem: r.method || null,\n    },\n    nedenler: [...nedenler],\n    ham,\n  },\n};\n",
         "mode": "runOnceForEachItem"
       },
       "name": "Kontrol et",
@@ -135,7 +135,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO fatura.belgeler\n    (kaynak, dosya_adi, firma, vergi_no, fatura_no, fatura_tarihi,\n     ara_toplam, kdv, toplam, yontem, durum, nedenler, onay_linki, ham_sonuc)\nVALUES ($1, $2, $3, $4, $5, $6::date, $7::numeric, $8::numeric, $9::numeric,\n        $10, $11, $12::jsonb, $13, $14::jsonb)\nRETURNING *;",
+        "query": "INSERT INTO fatura.belgeler\n    (kaynak, dosya_adi, firma, vergi_no, fatura_no, fatura_tarihi,\n     ara_toplam, kdv, toplam, yontem, durum, nedenler, onay_linki, ham_sonuc)\nVALUES ($1, $2, $3, $4, $5, $6::date, $7::numeric, $8::numeric, $9::numeric,\n        $10, $11, $12::jsonb, $13, $14::jsonb)\nRETURNING id, kaynak, dosya_adi, firma, vergi_no, fatura_no,\n    to_char(fatura_tarihi, 'YYYY-MM-DD') AS fatura_tarihi, ara_toplam, kdv, toplam,\n    yontem, durum, nedenler, onay_linki, karar_veren, karar_zamani;",
         "options": {
           "queryReplacement": "={{ [$json.kaynak, $json.dosya_adi, $json.firma, $json.vergi_no, $json.fatura_no, $json.fatura_tarihi, $json.ara_toplam, $json.kdv, $json.toplam, $json.yontem, $json.durum, JSON.stringify($json.nedenler), $json.onay_linki, JSON.stringify($json.ham)] }}"
         }
@@ -205,7 +205,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const b = $json;\nconst linkler = $('Karar ver').item.json.linkler;\nconst metin = [\n  `🧾 Onay bekleyen fatura #${b.id}`,\n  `Firma: ${b.firma ?? '-'}`,\n  `Fatura no: ${b.fatura_no ?? '-'}`,\n  `Tarih: ${b.fatura_tarihi ? String(b.fatura_tarihi).slice(0, 10) : '-'}`,\n  `Toplam: ${b.toplam ?? '-'}`,\n  '',\n  'Neden onaya düştü:',\n  ...b.nedenler.map(n => `• ${n}`),\n  '',\n  `✅ Onayla: ${linkler.onayla}`,\n  `❌ Reddet: ${linkler.reddet}`,\n].join('\\n');\n\nreturn { json: { ...b, chat_id: $('Hazırla').item.json.ayarlar.telegram_chat_id, metin } };\n",
+        "jsCode": "const b = $json;\nconst linkler = $('Karar ver').item.json.linkler;\nconst tl = v => `${Number(v).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} TL`;\nconst metin = [\n  `🧾 Onay bekleyen fatura #${b.id}`,\n  `Firma: ${b.firma ?? '-'}`,\n  `Fatura no: ${b.fatura_no ?? '-'}`,\n  `Tarih: ${b.fatura_tarihi ? String(b.fatura_tarihi).slice(0, 10) : '-'}`,\n  `Toplam: ${b.toplam == null ? '-' : tl(b.toplam)}`,\n  '',\n  'Neden onaya düştü:',\n  ...b.nedenler.map(n => `• ${n}`),\n  '',\n  `✅ Onayla: ${linkler.onayla}`,\n  `❌ Reddet: ${linkler.reddet}`,\n].join('\\n');\n\nreturn { json: { ...b, chat_id: $('Hazırla').item.json.ayarlar.telegram_chat_id, metin } };\n",
         "mode": "runOnceForEachItem"
       },
       "name": "Onay mesajı",
@@ -241,7 +241,7 @@
         }
       },
       "disabled": true,
-      "notes": "Telegram kimlik bilgisini ekleyip Hazırla'da telegram_chat_id'yi doldurunca açın."
+      "notes": "kurulum.ps1 açar: .env'de TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID olunca."
     },
     {
       "parameters": {
@@ -314,7 +314,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE fatura.belgeler\n   SET durum = $2::text, karar_veren = $3::text, karar_zamani = now()\n WHERE id = $1::bigint AND durum = 'onay_bekliyor'\nRETURNING *;",
+        "query": "UPDATE fatura.belgeler\n   SET durum = $2::text, karar_veren = $3::text, karar_zamani = now()\n WHERE id = $1::bigint AND durum = 'onay_bekliyor'\nRETURNING id, kaynak, dosya_adi, firma, vergi_no, fatura_no,\n    to_char(fatura_tarihi, 'YYYY-MM-DD') AS fatura_tarihi, ara_toplam, kdv, toplam,\n    yontem, durum, nedenler, onay_linki, karar_veren, karar_zamani;",
         "options": {
           "queryReplacement": "={{ [$json.id, $json.durum, $json.karar_veren] }}"
         }
@@ -411,7 +411,7 @@
         "documentId": {
           "__rl": true,
           "mode": "url",
-          "value": ""
+          "value": "__GOOGLE_SHEET_URL__"
         },
         "sheetName": {
           "__rl": true,
@@ -434,8 +434,14 @@
         400
       ],
       "id": "google-sheets'e-yaz",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "googleSheets0001",
+          "name": "Google Sheets"
+        }
+      },
       "disabled": true,
-      "notes": "Google kimlik bilgisini ve tablo adresini girip açın. Tabloda 'Faturalar' sayfası ve Sheets satırı node'undaki başlıklar olmalı."
+      "notes": "kurulum.ps1 açar: n8n'de bir Google Sheets kimlik bilgisi ve .env'de GOOGLE_SHEET_URL olunca. Tabloda 'Faturalar' sayfası ve başlık satırı olmalı."
     }
   ],
   "connections": {

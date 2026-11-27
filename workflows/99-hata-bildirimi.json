@@ -16,7 +16,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const e = $json.execution || {};\nconst mesaj = e.error?.message || 'Bilinmeyen hata';\nconst node = e.lastNodeExecuted || e.error?.node?.name || '';\nconst workflow = $json.workflow?.name || '';\nreturn {\n  json: {\n    workflow, node, mesaj, url: e.url || null,\n    metin: `⚠️ ${workflow} hata verdi\\nNode: ${node}\\n${mesaj}${e.url ? `\\n${e.url}` : ''}`,\n    chat_id: '',  // Hata mesajlarının gideceği Telegram sohbeti\n  },\n};\n",
+        "jsCode": "const e = $json.execution || {};\nconst mesaj = e.error?.message || 'Bilinmeyen hata';\nconst node = e.lastNodeExecuted || e.error?.node?.name || '';\nconst workflow = $json.workflow?.name || '';\nreturn {\n  json: {\n    workflow, node, mesaj, url: e.url || null,\n    metin: `⚠️ ${workflow} hata verdi\\nNode: ${node}\\n${mesaj}${e.url ? `\\n${e.url}` : ''}`,\n    chat_id: '__TELEGRAM_CHAT_ID__',  // kurulum.ps1 .env'den doldurur\n  },\n};\n",
         "mode": "runOnceForEachItem"
       },
       "name": "Hata özeti",
@@ -74,7 +74,7 @@
         }
       },
       "disabled": true,
-      "notes": "Telegram kimlik bilgisini ekleyip Hata özeti'nde chat_id'yi doldurunca açın."
+      "notes": "kurulum.ps1 açar: .env'de TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID olunca."
     }
   ],
   "connections": {

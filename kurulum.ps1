@@ -89,14 +89,34 @@ $credential = @(@{
     type = 'httpBasicAuth'
     data = @{ user = $chatUser; password = $envValues.ASISTAN_SIFRE }
 })
+# Telegram botu .env'den gelir (README, "Telegram"); yoksa bildirimler kapalı kalır.
+if ($envValues.TELEGRAM_BOT_TOKEN) {
+    $credential += @{
+        id   = 'telegramBot00001'
+        name = 'Telegram bot'
+        type = 'telegramApi'
+        data = @{ accessToken = $envValues.TELEGRAM_BOT_TOKEN }
+    }
+}
 Write-Utf8 credentials/kimlik-bilgileri.json (ConvertTo-Json -InputObject $credential -Depth 5)
 
 Write-Host 'Kimlik bilgileri ve workflow''lar yükleniyor...'
 docker compose exec -T n8n n8n import:credentials --input=/import/credentials/kimlik-bilgileri.json
 if ($LASTEXITCODE -ne 0) { throw 'Kimlik bilgileri yüklenemedi' }
-docker compose exec -T n8n n8n import:workflow --separate --input=/import/workflows
+
+# Workflow'lar bu kuruluma göre doldurulur: Telegram sohbeti, tablo adresi ve
+# n8n arayüzünde bağlanan Google hesapları (scripts/render-workflows.js).
+docker compose exec -T n8n sh -c 'n8n export:credentials --all --output=/tmp/kimlikler.json >/dev/null 2>&1'
+$render = docker compose exec -T -e "TELEGRAM_CHAT_ID=$($envValues.TELEGRAM_CHAT_ID)" `
+    -e "GOOGLE_SHEET_URL=$($envValues.GOOGLE_SHEET_URL)" n8n `
+    sh -c 'rm -rf /tmp/workflows && node /import/scripts/render-workflows.js /import/workflows /tmp/workflows /tmp/kimlikler.json; status=$?; rm -f /tmp/kimlikler.json; exit $status'
+if ($LASTEXITCODE -ne 0) { throw 'Workflow''lar hazırlanamadı' }
+$render | Where-Object { $_ -notlike 'READY=*' } | ForEach-Object { Write-Host "  $_" }
+$optional = (($render | Where-Object { $_ -like 'READY=*' }) -replace '^READY=', '') -split ',' | Where-Object { $_ }
+
+docker compose exec -T n8n n8n import:workflow --separate --input=/tmp/workflows
 if ($LASTEXITCODE -ne 0) { throw 'Workflow''lar yüklenemedi' }
-foreach ($id in 'HataBildirim0099', 'FaturaIsleme0001', 'FaturaAsistani03') {
+foreach ($id in @('HataBildirim0099', 'FaturaIsleme0001', 'FaturaAsistani03') + $optional) {
     docker compose exec -T n8n n8n publish:workflow --id=$id
     if ($LASTEXITCODE -ne 0) { throw "$id yayınlanamadı" }
 }
@@ -108,6 +128,12 @@ $threads = if ($envValues.OLLAMA_NUM_THREAD) { $envValues.OLLAMA_NUM_THREAD } el
 Write-Host "Asistan modeli hazırlanıyor (qwen3.5-asistan, $threads thread)..."
 docker compose exec -T ollama sh -c "ollama show qwen3.5:4b >/dev/null 2>&1 || ollama pull qwen3.5:4b; ollama show nomic-embed-text >/dev/null 2>&1 || ollama pull nomic-embed-text; printf 'FROM qwen3.5:4b\nPARAMETER num_thread $threads\n' > /tmp/Modelfile && ollama create qwen3.5-asistan -f /tmp/Modelfile" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Asistan modeli oluşturulamadı: docker compose logs ollama' }
+
+# Extractor'ın gizli modundaki görsel model de aynı thread ayarını alır; adı
+# extractor'ın beklediği gibi kalır (~2 GB, bir kez iner).
+Write-Host "Görsel model hazırlanıyor (qwen3-vl:2b-instruct, $threads thread)..."
+docker compose exec -T ollama sh -c "ollama show qwen3-vl:2b-instruct >/dev/null 2>&1 || ollama pull qwen3-vl:2b-instruct; printf 'FROM qwen3-vl:2b-instruct\nPARAMETER num_thread $threads\n' > /tmp/Modelfile && ollama create qwen3-vl:2b-instruct -f /tmp/Modelfile" | Out-Null
+if ($LASTEXITCODE -ne 0) { Write-Warning 'Görsel model hazırlanamadı; extractor OCR ve kurallarla çalışır.' }
 
 # Örnek belgeler RAG'e bir kez yüklenir (asistanın dokuman_sor aracı için).
 # RAG dışarıya açık değil; yükleme compose ağındaki bir curl konteynerinden yapılır.

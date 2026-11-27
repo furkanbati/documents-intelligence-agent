@@ -51,6 +51,7 @@ services:
       - n8n:/home/node/.n8n
       - ./workflows:/import/workflows:ro
       - ./credentials:/import/credentials:ro
+      - ./scripts:/import/scripts:ro
     depends_on:
       postgres:
         condition: service_healthy

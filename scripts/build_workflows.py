@@ -16,6 +16,7 @@ PG = {"postgres": {"id": "pgBelgeler000001", "name": "Postgres (belgeler)"}}
 TG = {"telegramApi": {"id": "telegramBot00001", "name": "Telegram bot"}}
 # kurulum.ps1, .env'deki FATURA_API_KEY ve ASISTAN_SIFRE ile oluşturur.
 API_ANAHTARI = {"httpHeaderAuth": {"id": "faturaApiAnahtar", "name": "Fatura API anahtarı"}}
+SHEETS = {"googleSheetsOAuth2Api": {"id": "googleSheets0001", "name": "Google Sheets"}}
 ASISTAN_GIRISI = {"httpBasicAuth": {"id": "asistanGirisi0001", "name": "Asistan girişi"}}
 
 FATURA_ID = "FaturaIsleme0001"
@@ -88,8 +89,9 @@ const AYARLAR = {
   belge_turu: 'invoice',
   // Bu tutarın üstündeki faturalar her zaman onaya düşer.
   oto_onay_limiti: 10000,
-  // Onay mesajlarının gideceği Telegram sohbeti (README, "Telegram").
-  telegram_chat_id: '',
+  // Onay mesajlarının gideceği Telegram sohbeti. kurulum.ps1, .env'deki
+  // TELEGRAM_CHAT_ID ile doldurur (scripts/render-workflows.js).
+  telegram_chat_id: '__TELEGRAM_CHAT_ID__',
 };
 
 const binary = $input.item.binary || {};
@@ -135,13 +137,14 @@ if (r.gate && !r.gate.accepted) {
 }
 
 const sayi = v => (v === null || v === undefined || v === '' || isNaN(Number(v))) ? null : Number(v);
+const tl = v => `${Number(v).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} TL`;
 const ara = sayi(n.subtotal), kdv = sayi(n.tax), toplam = sayi(n.total);
 if (ara !== null && kdv !== null && toplam !== null && Math.abs(ara + kdv - toplam) > 0.05) {
-  nedenler.add(`Tutarlar tutmuyor: ${ara} + ${kdv} ≠ ${toplam}`);
+  nedenler.add(`Tutarlar tutmuyor: ${tl(ara)} + ${tl(kdv)} ≠ ${tl(toplam)}`);
 }
 const limit = hazirla.ayarlar.oto_onay_limiti;
 if (toplam !== null && toplam > limit) {
-  nedenler.add(`Toplam ${toplam}, otomatik onay limitini (${limit}) aşıyor`);
+  nedenler.add(`Toplam ${tl(toplam)}, otomatik onay limitini (${tl(limit)}) aşıyor`);
 }
 
 const temiz = v => (v || '').toString().trim() || null;
@@ -204,13 +207,20 @@ return {
 };
 """
 
-KAYIT_EKLE = """
+# DATE sütunu metin olarak döner: n8n'in Postgres node'u onu yerel gece yarısı
+# bir zaman damgasına çevirir; UTC'de bir önceki gün olur (26.11 -> 2026-11-25T21:00Z)
+# ve mesajlarda, Sheets'te ve asistanda tarih bir gün kayardı.
+KAYIT_SUTUNLARI = """id, kaynak, dosya_adi, firma, vergi_no, fatura_no,
+    to_char(fatura_tarihi, 'YYYY-MM-DD') AS fatura_tarihi, ara_toplam, kdv, toplam,
+    yontem, durum, nedenler, onay_linki, karar_veren, karar_zamani"""
+
+KAYIT_EKLE = f"""
 INSERT INTO fatura.belgeler
     (kaynak, dosya_adi, firma, vergi_no, fatura_no, fatura_tarihi,
      ara_toplam, kdv, toplam, yontem, durum, nedenler, onay_linki, ham_sonuc)
 VALUES ($1, $2, $3, $4, $5, $6::date, $7::numeric, $8::numeric, $9::numeric,
         $10, $11, $12::jsonb, $13, $14::jsonb)
-RETURNING *;
+RETURNING {KAYIT_SUTUNLARI};
 """
 
 KAYIT_PARAMS = ("={{ [$json.kaynak, $json.dosya_adi, $json.firma, $json.vergi_no, $json.fatura_no, "
@@ -221,12 +231,13 @@ KAYIT_PARAMS = ("={{ [$json.kaynak, $json.dosya_adi, $json.firma, $json.vergi_no
 ONAY_MESAJI = r"""
 const b = $json;
 const linkler = $('Karar ver').item.json.linkler;
+const tl = v => `${Number(v).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} TL`;
 const metin = [
   `🧾 Onay bekleyen fatura #${b.id}`,
   `Firma: ${b.firma ?? '-'}`,
   `Fatura no: ${b.fatura_no ?? '-'}`,
   `Tarih: ${b.fatura_tarihi ? String(b.fatura_tarihi).slice(0, 10) : '-'}`,
-  `Toplam: ${b.toplam ?? '-'}`,
+  `Toplam: ${b.toplam == null ? '-' : tl(b.toplam)}`,
   '',
   'Neden onaya düştü:',
   ...b.nedenler.map(n => `• ${n}`),
@@ -313,7 +324,7 @@ SELECT
             "chatId": "={{ $json.chat_id }}", "text": "={{ $json.metin }}",
             "additionalFields": {"appendAttribution": False, "disable_web_page_preview": True}},
             credentials=TG, disabled=True,
-            notes="Telegram kimlik bilgisini ekleyip Hazırla'da telegram_chat_id'yi doldurunca açın."),
+            notes="kurulum.ps1 açar: .env'de TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID olunca."),
         node("Karar bekle", "n8n-nodes-base.wait", 1.1, (2420, 180), {
             "resume": "webhook", "httpMethod": "GET", "responseMode": "responseNode",
             "limitWaitTime": True, "limitType": "afterTimeInterval",
@@ -321,11 +332,11 @@ SELECT
             webhookId="fatura-karar-bekle"),
         code("Kararı oku", (2640, 180), KARARI_OKU),
         if_("Karar verildi mi?", (2860, 180), "={{ $json.durum }}", "notEmpty"),
-        sql("Kararı kaydet", (3080, 100), """
+        sql("Kararı kaydet", (3080, 100), f"""
 UPDATE fatura.belgeler
    SET durum = $2::text, karar_veren = $3::text, karar_zamani = now()
  WHERE id = $1::bigint AND durum = 'onay_bekliyor'
-RETURNING *;
+RETURNING {KAYIT_SUTUNLARI};
 """, "={{ [$json.id, $json.durum, $json.karar_veren] }}"),
         node("Karar sayfası", "n8n-nodes-base.respondToWebhook", 1.1, (3300, 100), {
             "respondWith": "text", "responseBody": KARAR_SAYFASI,
@@ -335,14 +346,14 @@ RETURNING *;
         code("Sheets satırı", (3740, 400), SHEETS_SATIRI),
         node("Google Sheets'e yaz", "n8n-nodes-base.googleSheets", 4.5, (3960, 400), {
             "operation": "append",
-            "documentId": {"__rl": True, "mode": "url", "value": ""},
+            "documentId": {"__rl": True, "mode": "url", "value": "__GOOGLE_SHEET_URL__"},
             "sheetName": {"__rl": True, "mode": "name", "value": "Faturalar"},
             "columns": {"mappingMode": "autoMapInputData", "value": {}, "matchingColumns": [],
                         "schema": []},
             "options": {}},
-            disabled=True,
-            notes="Google kimlik bilgisini ve tablo adresini girip açın. Tabloda 'Faturalar' sayfası "
-                  "ve Sheets satırı node'undaki başlıklar olmalı."),
+            credentials=SHEETS, disabled=True,
+            notes="kurulum.ps1 açar: n8n'de bir Google Sheets kimlik bilgisi ve .env'de "
+                  "GOOGLE_SHEET_URL olunca. Tabloda 'Faturalar' sayfası ve başlık satırı olmalı."),
     ]
     connections = connect(
         ("Fatura geldi", "Hazırla"),
@@ -422,7 +433,7 @@ return {
   json: {
     workflow, node, mesaj, url: e.url || null,
     metin: `⚠️ ${workflow} hata verdi\nNode: ${node}\n${mesaj}${e.url ? `\n${e.url}` : ''}`,
-    chat_id: '',  // Hata mesajlarının gideceği Telegram sohbeti
+    chat_id: '__TELEGRAM_CHAT_ID__',  // kurulum.ps1 .env'den doldurur
   },
 };
 """
@@ -441,7 +452,7 @@ VALUES ($1, $2, $3, $4) RETURNING id;
             "text": "={{ $('Hata özeti').item.json.metin }}",
             "additionalFields": {"appendAttribution": False}},
             credentials=TG, disabled=True,
-            notes="Telegram kimlik bilgisini ekleyip Hata özeti'nde chat_id'yi doldurunca açın."),
+            notes="kurulum.ps1 açar: .env'de TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID olunca."),
     ]
     connections = connect(("Hata oldu", "Hata özeti"), ("Hata özeti", "Hatayı kaydet"),
                           ("Hatayı kaydet", "Telegram'a bildir"))
@@ -454,6 +465,9 @@ OLLAMA = {"ollamaApi": {"id": "ollamaYerel00001", "name": "Ollama (yerel)"}}
 
 SISTEM_MESAJI = """=Sen XYZ Market muhasebe biriminin fatura asistanısın. Bugünün tarihi {{ $now.toFormat('yyyy-MM-dd') }}.
 
+DİL KURALI (en önemli kural): Cevabı kullanıcının son mesajının dilinde yaz. Kullanıcı İngilizce yazdıysa cevabın tamamı İngilizce olmalı; araç sonuçları ve belgeler Türkçe olsa bile onları İngilizceye çevir. Türkçe soruya Türkçe cevap ver.
+LANGUAGE RULE (most important): Reply in the language of the user's last message. If the user writes in English, your whole reply must be in English, translating Turkish tool results and document text.
+
 Araçların:
 - fatura_toplami: tedarikçi ve duruma göre fatura adedi ve toplam tutar. "Ne kadar", "toplam", "kaç fatura" soruları için.
 - fatura_listesi: faturaları tek tek listeler (numara, tarih, tutar, durum). Belirli faturaları görmek için.
@@ -463,7 +477,8 @@ Kurallar:
 - Rakamları ve fatura bilgilerini yalnızca araç sonuçlarından ver; asla tahmin etme veya uydurma.
 - Sonuçlardaki durumlar: otomatik_onay (sistem onayladı) ve onaylandi (bir kişi onayladı) ikisi de onaylanmış faturadır; onay_bekliyor bekleyen, reddedildi reddedilmiş faturadır. Onaylanmış faturalar sorulunca durum filtresine "onaylanan" ver.
 - "Geçen ay", "bu yıl" gibi ifadeleri bugünün tarihine göre YYYY-AA-GG aralığına çevir.
-- Tutarlar TL'dir. Cevabı kısa ve Türkçe ver. Belgeden gelen bilgide belgenin adını söyle.
+- Tutarlar TL'dir. Cevabı kısa tut. Belgeden gelen bilgide belgenin adını söyle.
+- dokuman_sor aracına soruyu her zaman Türkçe sor; belgeler Türkçedir.
 - Araçlar bir şey bulamazsa bunu açıkça söyle."""
 
 FIRMA = "$fromAI('firma', 'Firma adı veya bir parçası; tüm firmalar için boş bırak', 'string', '')"
@@ -531,7 +546,8 @@ SELECT firma, durum, count(*)::int AS adet, sum(toplam) AS toplam_tl
         arac_sql("fatura_listesi", (780, 560),
                  "Faturaları tek tek listeler (en yeni 20). Filtreler isteğe bağlıdır.",
                  f"""
-SELECT id, firma, fatura_no, fatura_tarihi, toplam AS toplam_tl, durum, nedenler
+SELECT id, firma, fatura_no, to_char(fatura_tarihi, 'YYYY-MM-DD') AS fatura_tarihi,
+       toplam AS toplam_tl, durum, nedenler
   FROM fatura.belgeler{FILTRE}
  ORDER BY fatura_tarihi DESC NULLS LAST, id DESC
  LIMIT 20;"""),

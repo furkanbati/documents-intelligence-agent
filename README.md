@@ -251,32 +251,33 @@ Belgeler müşterinin sunucusundan çıkmamalıysa yerel modelde kalın.
 `01 Fatura işleme` içindeki **Hazırla** node'unun başında:
 
 - `oto_onay_limiti`: bu tutarın üstündeki faturalar her zaman onaya düşer
-- `telegram_chat_id`: onay mesajlarının gideceği sohbet
+- `telegram_chat_id`: onay mesajlarının gideceği sohbet; kurulum `.env`'deki
+  `TELEGRAM_CHAT_ID` ile doldurur
 - `profil`, `belge_turu`: extractor'a iletilir
 
 ## Telegram, Gmail ve Google Sheets'i açmak
 
-Bu node'lar kimlik bilgisi gerektirdiği için kapalı (disabled) gelir. Kapalıyken
-akış onları atlayıp devam eder.
+Bu node'lar kapalı gelir; kapalıyken akış onları atlayıp devam eder.
+`kurulum.ps1` her node'u, ihtiyaç duyduğu her şey hazır olunca kendisi açar
+(`scripts/render-workflows.js`). Çıktısında her node için `açık`/`kapalı` yazar.
+Ayarlar `.env`'de ve n8n'deki kimlik bilgilerinde durduğu için kurulumu tekrar
+çalıştırmak bağlantıları bozmaz.
 
-1. **Telegram:** @BotFather'dan bir bot oluşturun. n8n'de *Credentials → Telegram API*
-   ekleyin, adı `Telegram bot` olsun. Asistanın Telegram'dan çalışması için
-   `03 Fatura asistanı` içindeki *Telegram mesajı* ve *Telegram'a yanıt* node'larını açın;
-   Telegram tetikleyicisi https adresi ister, bu yüzden `PUBLIC_URL` gerekir. Bota bir mesaj atın,
-   `https://api.telegram.org/bot<TOKEN>/getUpdates` adresinden `chat.id` değerini alın ve
-   Hazırla'daki `telegram_chat_id` alanına yazın. Ardından *Telegram'a gönder* node'unu açın.
-   Linklerin telefondan da çalışması için n8n dışarıdan erişilebilir olmalı:
-   bir Cloudflare Tunnel veya ngrok adresini `.env`'deki `PUBLIC_URL`'e yazıp
-   `docker compose up -d` çalıştırın.
-2. **Google Sheets:** *Credentials → Google Sheets OAuth2* ekleyin. İçinde `Faturalar`
-   sayfası olan bir tablo açın ve ilk satıra *Sheets satırı* node'undaki başlıkları yazın
-   (`Kayıt, Fatura Tarihi, Firma, Vergi No, Fatura No, Ara Toplam, KDV, Toplam, Durum, Kaynak`).
-   Tablo adresini *Google Sheets'e yaz* node'una girip node'u açın.
-3. **Gmail:** *Credentials → Gmail OAuth2* ekleyin, `02 Gmail eki → fatura işleme`
-   workflow'unda seçin ve yayınlayın. Okunmamış, ekli e-postaların PDF, XML ve görsel
-   ekleri tek tek fatura işlemeye gönderilir.
+| Entegrasyon | Gerekenler |
+|---|---|
+| Telegram onay ve hata mesajları | `.env`: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` |
+| Google Sheets'e yazma | n8n'de bir *Google Sheets OAuth2* kimlik bilgisi; `.env`: `GOOGLE_SHEET_URL` |
+| Gmail'den fatura alma (02) | n8n'de bir *Gmail OAuth2* kimlik bilgisi |
 
-Değişikliklerden sonra workflow'u n8n'de **Publish** edin.
+Google kimlik bilgilerinin adı önemli değildir; kurulum onları türüne göre bulur.
+Adım adım kurulum (Google Cloud OAuth istemcisi, tablo başlıkları, bot ve sohbet
+kimliği): [demo/DEMO.md](demo/DEMO.md), bölüm 1.
+
+Onay linkleri `PUBLIC_URL` adresini kullanır (varsayılan `localhost`): Telegram
+Desktop'ta aynı bilgisayarda açılır. Telefondan açmak için n8n dışarıdan
+erişilebilir olmalı (Cloudflare Tunnel veya ngrok adresi `PUBLIC_URL`'e).
+Asistanın Telegram'dan çalışması (`03` içindeki *Telegram mesajı* ve *Telegram'a
+yanıt*) da https adres ister; bu iki node elle açılır.
 
 ## Workflow'ları düzenlemek
 
@@ -290,6 +291,13 @@ Bu yol, kodu okunur halde tutmak ve sürüm kontrolüne koymak için var. n8n ar
 değişiklik yapıp onu kalıcı kılmak isterseniz workflow'u arayüzden export edip
 `workflows/` klasörüne yazın; o noktadan sonra betiği kullanmayın. Aynı workflow'un
 iki kaynağı olmasın.
+
+## Demo
+
+`demo/` klasöründe tanıtım videosu için her şey var: üç gerçekçi fatura PDF'i
+(`make_invoices.py` ile üretilir), sistemi her çekimden önce aynı temiz duruma
+getiren `demo-hazirla.ps1` ve hesap kurulumu ile sahne sahne çekim senaryosu
+([demo/DEMO.md](demo/DEMO.md), İngilizce).
 
 ## Lisans
 
